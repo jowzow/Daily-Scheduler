@@ -1,82 +1,113 @@
 document.addEventListener('DOMContentLoaded', () => {
-  const calendar = document.getElementById('calendar');
-  const labels = document.getElementById('labels');
+  const calendar      = document.getElementById('calendar');
+  const labels        = document.getElementById('labels');
   const scrollWrapper = document.getElementById('scroll-wrapper');
-  const palette = document.getElementById('palette');
-  const createBtn = document.getElementById('create-block-btn');
-  let selectedBlock = null;
+  const palette       = document.getElementById('palette');
+  const createBtn     = document.getElementById('create-block-btn');
+
+  let selectedBlock   = null;
   let copiedBlockData = null;
-  let latestMouseYInCalendar = null;
+  let latestMouseY    = 0;
+  const initialTypes  = ['work','eat','exercise','free time','going out','misc'];
 
-  const initialTypes = ['work', 'eat', 'exercise', 'free time', 'going out', 'misc'];
+  function getColorForType(type) {
+    if (type==='eat'||type==='exercise')            return 'lightyellow';
+    if (['free time','going out','misc'].includes(type)) return '#ffe0e0';
+    if (type==='work')                                  return '#e0ffe0';
+    return '#ddd';
+  }
 
+  // Build grid and current‐time line
   const currentTimeLine = document.createElement('div');
   currentTimeLine.id = 'current-time-line';
   calendar.appendChild(currentTimeLine);
   function updateCurrentTimeLine() {
-    const now = new Date();
-    const minutes = now.getHours() * 60 + now.getMinutes();
-    currentTimeLine.style.top = `${Math.round(minutes / 15) * 15}px`;
+    const now     = new Date(),
+          minutes = now.getHours()*60 + now.getMinutes(),
+          y       = Math.round(minutes/15)*15;
+    currentTimeLine.style.top = `${y}px`;
   }
   updateCurrentTimeLine();
   setInterval(updateCurrentTimeLine, 60000);
 
   for (let i = 0; i < 96; i++) {
     const slot = document.createElement('div');
-    slot.className = 'time-slot' + (i % 4 === 0 ? ' hour' : '');
+    slot.className = 'time-slot' + (i%4===0?' hour':'');
     calendar.appendChild(slot);
-    if (i % 4 === 0) {
+    if (i%4===0) {
       const line = document.createElement('div');
       line.className = 'label-line';
-      line.style.top = `${i * 15}px`;
-      const h = Math.floor(i / 4), ampm = h >= 12 ? 'pm' : 'am', dh = h % 12 || 12;
+      line.style.top = `${i*15}px`;
+      const h    = Math.floor(i/4),
+            ampm = h >= 12 ? 'pm' : 'am',
+            dh   = h % 12 || 12;
       line.innerText = `${dh}:00 ${ampm}`;
       labels.appendChild(line);
     }
   }
 
+  // Placeholder for drag preview
+  const placeholder = document.createElement('div');
+  placeholder.className = 'placeholder';
+  placeholder.style.display = 'none';
+  calendar.appendChild(placeholder);
+
+  // Initialize palette items
   function initPaletteItem(tpl) {
     tpl.draggable = true;
     tpl.dataset.type = tpl.innerText.trim().toLowerCase();
+    tpl.style.backgroundColor = getColorForType(tpl.dataset.type);
+
     tpl.addEventListener('dragstart', e => {
       e.dataTransfer.setData('text/plain', tpl.dataset.type);
-      e.dataTransfer.setData('custom-block-id', tpl.dataset.type + Math.random());
-      e.dataTransfer.effectAllowed = "move";
+      // hide native ghost
+      const img = new Image();
+      img.src = 'data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=';
+      e.dataTransfer.setDragImage(img, 0, 0);
+      placeholder.style.display = 'block';
       tpl.classList.add('dragging');
     });
     tpl.addEventListener('dragend', () => {
+      placeholder.style.display = 'none';
       tpl.classList.remove('dragging');
     });
+
+    // *** NEW: double‐click now selects the block ***
     tpl.addEventListener('dblclick', () => {
-      tpl.setAttribute('contenteditable', 'true');
+      deselectBlock();
+      tpl.classList.add('selected');
+      selectedBlock = tpl;
+
+      // also enter edit mode if you like
+      tpl.classList.add('editing');
+      tpl.setAttribute('contenteditable','true');
       tpl.focus();
     });
     tpl.addEventListener('blur', () => {
+      tpl.classList.remove('editing');
       tpl.removeAttribute('contenteditable');
       tpl.dataset.type = tpl.innerText.trim().toLowerCase() || 'custom';
+      tpl.style.backgroundColor = getColorForType(tpl.dataset.type);
       saveCustomBlocks();
     });
   }
 
+  // Load custom blocks
   chrome.storage.local.get('customBlocks', data => {
-    const customs = data.customBlocks || [];
-    for (const txt of customs) {
+    (data.customBlocks||[]).forEach(txt => {
       const tpl = document.createElement('div');
       tpl.className = 'draggable-template';
       tpl.innerText = txt;
-      tpl.dataset.type = txt;
-      initPaletteItem(tpl);
       palette.insertBefore(tpl, createBtn);
-    }
-    document.querySelectorAll('.draggable-template')
-      .forEach(initPaletteItem);
+    });
+    document.querySelectorAll('.draggable-template').forEach(initPaletteItem);
   });
 
+  // Create new custom block
   createBtn.addEventListener('click', () => {
     const tpl = document.createElement('div');
     tpl.className = 'draggable-template';
-    tpl.innerText = ''; // blank by default
-    tpl.dataset.type = 'custom';
+    tpl.innerText = '';
     initPaletteItem(tpl);
     palette.insertBefore(tpl, createBtn);
     saveCustomBlocks();
@@ -84,92 +115,99 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function saveCustomBlocks() {
     const customs = Array.from(palette.querySelectorAll('.draggable-template'))
-      .map(t => t.dataset.type)
-      .filter(t => !initialTypes.includes(t));
+                         .map(t=>t.dataset.type)
+                         .filter(t=>!initialTypes.includes(t));
     chrome.storage.local.set({ customBlocks: customs });
   }
 
-  calendar.addEventListener('dragover', e => e.preventDefault());
+  // Scroll persistence
+  scrollWrapper.addEventListener('scroll', () => {
+    chrome.storage.local.set({ scrollTop: scrollWrapper.scrollTop });
+  });
+
+  // Drag preview
+  calendar.addEventListener('dragover', e => {
+    e.preventDefault();
+    const wr     = scrollWrapper.getBoundingClientRect();
+    const rawY   = (e.clientY - wr.top + scrollWrapper.scrollTop) - 30;
+    const snapped= Math.round(rawY/15)*15;
+    placeholder.style.top = `${Math.max(0, Math.min(snapped, calendar.clientHeight-60))}px`;
+    placeholder.style.display = 'block';
+  });
+  calendar.addEventListener('dragleave', () => {
+    placeholder.style.display = 'none';
+  });
+
+  // Drop handler
   calendar.addEventListener('drop', e => {
     e.preventDefault();
+    placeholder.style.display = 'none';
     const type = e.dataTransfer.getData('text/plain');
-    const block = document.createElement('div');
-    block.className = 'event';
-    block.innerText = type;
+    const wr   = scrollWrapper.getBoundingClientRect();
+    const rawY = (e.clientY - wr.top + scrollWrapper.scrollTop) - 30;
+    const y    = Math.max(0, Math.min(calendar.clientHeight-60, Math.round(rawY/15)*15));
 
-    if (type === 'eat' || type === 'exercise') block.style.backgroundColor = 'lightyellow';
-    else if (['free time', 'going out', 'misc'].includes(type)) block.style.backgroundColor = '#ffe0e0';
-    else if (type === 'work') block.style.backgroundColor = '#e0ffe0';
-    else block.style.backgroundColor = '#ddd';
+    const blk = document.createElement('div');
+    blk.className = 'event';
+    blk.innerText = type;
+    blk.style.top = `${y}px`;
+    blk.style.height = '60px';
+    blk.style.backgroundColor = getColorForType(type);
 
-    const rect = calendar.getBoundingClientRect();
-    let y = Math.round((e.clientY - rect.top) / 15) * 15;
-    y = Math.max(0, Math.min(y, calendar.clientHeight - 60));
-    block.style.top = `${y}px`;
-    block.style.height = '60px';
-
-    addBlockListeners(block);
-    makeDraggableAndResizable(block);
-    calendar.appendChild(block);
+    addBlockListeners(blk);
+    makeDraggableAndResizable(blk);
+    calendar.appendChild(blk);
     saveSchedule();
 
-    const allTemplates = Array.from(palette.querySelectorAll('.draggable-template'));
-    const match = allTemplates.find(t =>
-      !initialTypes.includes(t.dataset.type) &&
-      t.classList.contains('dragging')
-    );
-    if (match) {
-      match.remove();
+    // Remove one‐time custom
+    const tpl = palette.querySelector('.draggable-template.dragging');
+    if (tpl && !initialTypes.includes(tpl.dataset.type)) {
+      tpl.remove();
       saveCustomBlocks();
     }
   });
 
-  calendar.addEventListener('mousemove', e => {
-    const rect = calendar.getBoundingClientRect();
-    latestMouseYInCalendar = e.clientY - rect.top;
-  });
-
+  // Deselect outside click, delete/copy/paste
   document.addEventListener('click', e => {
     if (!e.target.classList.contains('event')) deselectBlock();
   });
-
   document.addEventListener('keydown', e => {
-    const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-    const ctrl = isMac ? e.metaKey : e.ctrlKey;
+    const isMac = /Mac/.test(navigator.platform),
+          ctrl  = isMac ? e.metaKey : e.ctrlKey;
 
-    if ((e.key === 'Delete' || e.key === 'Backspace') &&
-        selectedBlock && !selectedBlock.classList.contains('editing')) {
+    if ((e.key==='Delete'||e.key==='Backspace') && selectedBlock && !selectedBlock.classList.contains('editing')) {
       selectedBlock.remove();
       selectedBlock = null;
       saveSchedule();
     }
-
-    if (ctrl && e.key === 'c' && selectedBlock) {
+    if (ctrl && e.key==='c' && selectedBlock) {
       copiedBlockData = {
-        text: selectedBlock.innerText,
+        text:   selectedBlock.innerText,
         height: selectedBlock.style.height,
-        color: selectedBlock.style.backgroundColor
+        color:  selectedBlock.style.backgroundColor
       };
     }
-
-    if (ctrl && e.key === 'v' && copiedBlockData) {
-      let y = latestMouseYInCalendar;
-      if (y == null) return;
-      y = Math.round(y / 15) * 15;
-      y = Math.max(0, Math.min(y, calendar.clientHeight - 15));
-
-      const block = document.createElement('div');
-      block.className = 'event';
-      block.innerText = copiedBlockData.text;
-      block.style.top = `${y}px`;
-      block.style.height = copiedBlockData.height || '60px';
-      block.style.backgroundColor = copiedBlockData.color || '#ddd';
-
-      addBlockListeners(block);
-      makeDraggableAndResizable(block);
-      calendar.appendChild(block);
+    if (ctrl && e.key==='v' && copiedBlockData) {
+      const rawY = latestMouseY - 30;
+      const y    = Math.max(0, Math.min(calendar.clientHeight-parseInt(copiedBlockData.height||60),
+                           Math.round(rawY/15)*15));
+      const b = document.createElement('div');
+      b.className = 'event';
+      b.innerText = copiedBlockData.text;
+      b.style.top = `${y}px`;
+      b.style.height = copiedBlockData.height;
+      b.style.backgroundColor = copiedBlockData.color;
+      addBlockListeners(b);
+      makeDraggableAndResizable(b);
+      calendar.appendChild(b);
       saveSchedule();
     }
+  });
+
+  // Track mouse for paste
+  calendar.addEventListener('mousemove', e => {
+    const wr         = scrollWrapper.getBoundingClientRect();
+    latestMouseY     = e.clientY - wr.top + scrollWrapper.scrollTop;
   });
 
   function deselectBlock() {
@@ -178,97 +216,97 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   function addBlockListeners(b) {
-    b.addEventListener('click', e => {
-      deselectBlock();
-      b.classList.add('selected');
-      selectedBlock = b;
-      e.stopPropagation();
-    });
-    b.addEventListener('dblclick', () => {
-      b.classList.add('editing');
-      b.setAttribute('contenteditable', 'true');
-      b.focus();
-    });
-    b.addEventListener('blur', () => {
-      b.classList.remove('editing');
-      b.setAttribute('contenteditable', 'false');
-      saveSchedule();
-    });
-  }
+  // Single-click now selects
+  b.addEventListener('click', e => {
+    deselectBlock();
+    b.classList.add('selected');
+    selectedBlock = b;
+    e.stopPropagation();
+  });
+
+  // Double-click enters edit mode
+  b.addEventListener('dblclick', () => {
+    b.classList.add('editing');
+    b.setAttribute('contenteditable','true');
+    b.focus();
+  });
+
+  // Blur exits edit mode
+  b.addEventListener('blur', () => {
+    b.classList.remove('editing');
+    b.removeAttribute('contenteditable');
+    saveSchedule();
+  });
+}
+
 
   function makeDraggableAndResizable(el) {
-    let isResizing = false, dir = null, offsetY = 0;
+    let isResizing=false, dir=null, offset=0;
     el.addEventListener('mousedown', e => {
-      if (e.button !== 0 || el.classList.contains('editing')) return;
+      if (e.button!==0 || el.classList.contains('editing')) return;
       deselectBlock();
-      const rect = calendar.getBoundingClientRect();
-      const startY = e.clientY, startTop = el.offsetTop, startH = el.offsetHeight;
-      offsetY = e.offsetY;
+      offset = e.offsetY;
+      const wr     = scrollWrapper.getBoundingClientRect(),
+            startY = e.clientY,
+            startTop = el.offsetTop,
+            startH   = el.offsetHeight;
 
-      if (e.offsetY < 10) dir = 'top', isResizing = true;
-      else if (e.offsetY > startH - 10) dir = 'bottom', isResizing = true;
+      if (e.offsetY < 10)                  { isResizing=true; dir='top'; }
+      else if (e.offsetY > startH - 10)    { isResizing=true; dir='bottom'; }
 
-      function onMouseMove(e) {
+      function onMove(e) {
+        const scrollY = scrollWrapper.scrollTop;
         if (isResizing) {
-          if (dir === 'bottom') {
-            let h = Math.round((startH + (e.clientY - startY)) / 15) * 15;
-            h = Math.max(15, Math.min(h, calendar.clientHeight - startTop));
-            el.style.height = `${h}px`;
+          if (dir==='bottom') {
+            let h = Math.round((startH+(e.clientY-startY))/15)*15;
+            h = Math.max(15, Math.min(h, calendar.clientHeight-startTop));
+            el.style.height=`${h}px`;
           } else {
-            let delta = e.clientY - startY;
-            let newTop = Math.round((startTop + delta) / 15) * 15;
-            let h = Math.round((startH - delta) / 15) * 15;
-            if (newTop >= 0 && newTop + h <= calendar.clientHeight) {
-              el.style.top = `${newTop}px`;
-              el.style.height = `${h}px`;
+            let delta = e.clientY - startY,
+                nt    = Math.round((startTop+delta)/15)*15,
+                h     = Math.round((startH-delta)/15)*15;
+            if (nt>=0 && nt+h<=calendar.clientHeight) {
+              el.style.top=`${nt}px`;
+              el.style.height=`${h}px`;
             }
           }
         } else {
-          let y = Math.round((e.clientY - rect.top - offsetY) / 15) * 15;
+          let y = (e.clientY - wr.top + scrollY) - offset;
           y = Math.max(0, Math.min(y, calendar.clientHeight - el.offsetHeight));
-          el.style.top = `${y}px`;
+          el.style.top = `${Math.round(y/15)*15}px`;
         }
       }
 
-      function onMouseUp() {
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        isResizing = false;
-        dir = null;
+      function onUp() {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        isResizing=false; dir=null;
         saveSchedule();
       }
 
-      document.addEventListener('mousemove', onMouseMove);
-      document.addEventListener('mouseup', onMouseUp);
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
     });
   }
 
   function saveSchedule() {
-    const evs = Array.from(document.querySelectorAll('.event')).map(evt => ({
+    const arr = Array.from(calendar.querySelectorAll('.event')).map(evt => ({
       top: evt.style.top,
       height: evt.style.height,
       text: evt.innerText,
-      color: evt.style.backgroundColor || ''
+      color: evt.style.backgroundColor
     }));
-    chrome.storage.local.set({
-      schedule: evs,
-      scrollTop: scrollWrapper.scrollTop
-    });
+    chrome.storage.local.set({ schedule: arr, scrollTop: scrollWrapper.scrollTop });
   }
 
-  scrollWrapper.addEventListener('scroll', () => {
-    chrome.storage.local.set({ scrollTop: scrollWrapper.scrollTop });
-  });
-
-  chrome.storage.local.get(['schedule', 'scrollTop'], data => {
-    (data.schedule || []).forEach(evt => {
+  chrome.storage.local.get(['schedule','scrollTop'], data => {
+    (data.schedule||[]).forEach(evt => {
       const b = document.createElement('div');
       b.className = 'event';
       b.innerText = evt.text;
       b.style.top = evt.top;
       b.style.height = evt.height;
-      b.style.backgroundColor = evt.color || '#ddd';
-      b.setAttribute('contenteditable', false);
+      b.style.backgroundColor = evt.color;
       addBlockListeners(b);
       makeDraggableAndResizable(b);
       calendar.appendChild(b);
